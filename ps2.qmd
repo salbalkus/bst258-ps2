@@ -1,0 +1,261 @@
+---
+title: "Problem Set #X"
+subtitle: "BST 258: Causal Inference -- Theory and Practice"
+author: "[Your Name Here]"
+date: ""
+format:
+  pdf:
+    documentclass: scrartcl
+    papersize: letter
+    fontsize: 11pt
+    geometry:
+      - margin=1in
+      - heightrounded
+    number-sections: false
+    colorlinks: true
+    link-citations: true
+    callout-appearance: simple
+    callout-icon: false
+    # figure options
+    fig-width: 6
+    fig-asp: 0.618
+    fig-cap-location: bottom
+    # code block options
+    code-line-numbers: false
+    code-block-bg: false
+    highlight-style: nord
+bibliography: refs.bib
+---
+
+```{r}
+#| echo: false
+#| message: false
+#| label: global-setup
+# NOTE: The immediately following line loads an renv environment located at the
+#       nearest "top-level" directory, as marked by a `.here` file, which is
+#       located by the here::here() function. This would be a useful tool if,
+#       say, this template.qmd file was not located at the top-level directory.
+#       Here, renv should activate automatically when this file is opened.
+#renv::load(here::here())
+library(here)
+library(tidyverse)
+library(geepack)
+```
+
+## Question 1: Inverse Probability Weighting
+
+### Part 1: Theory
+
+### Part 2: Application - Inverse Probability Weighted Estimation
+
+```{r}
+library(fastverse)
+library(readxl)
+library(stringr)
+# create URLs for downloading NHEFS data
+url_trunks <- c("2012/10/nhefs_sas.zip", "2012/10/nhefs_stata.zip",
+"2017/01/nhefs_excel.zip", "1268/20/nhefs.csv")
+url_stub <- "https://cdn1.sph.harvard.edu/wp-content/uploads/sites/1268/"
+data_urls <- lapply(url_trunks, function(url_trunk) {
+paste0(url_stub, url_trunk)
+})
+# download and unzip files
+temp <- tempfile()
+for (i in seq_len(sum(str_count(url_trunks, "zip")))) {
+download.file(data_urls[[i]], temp)
+unzip(temp, exdir = "data")
+}
+download.file(data_urls[[4]], "data/nhefs.csv")
+```
+#### a)
+
+The code below generates IP weights and stabilized weights.
+
+```{r}
+df <- read.csv(here("data", "nhefs.csv"))
+df <- df %>% 
+  select(wt82_71, qsmk, sex, age, race, education, smokeintensity, smokeyrs, active, exercise, wt71) %>% 
+  transform(education = factor(education), active = factor(active), exercise = factor(exercise))
+
+
+prop_model <- glm(qsmk ~ sex + age + race + education + smokeintensity + smokeyrs + active + exercise + wt71 + age^2 + wt71^2 + smokeintensity^2 + smokeyrs^2, data = df, family = binomial(link='logit'))
+prop <- predict(prop_model, df, type="response")
+p <- mean(df$qsmk)
+
+`IPW Weights` <- ifelse(df$qsmk, 1 / prop, 1 / (1-prop))
+`Stabilized IPW Weights` <- `IPW Weights` * ifelse(df$qsmk, p, 1-p)
+
+```
+
+```{r}
+par(mfrow = c(1,2))
+hist(`IPW Weights`)
+hist(`Stabilized IPW Weights`)
+```
+As we can see by comparing the histograms, although both sets of weights follow the same distribution, the stabilized weights are far less skewed, and contain fewer large values.
+
+#### b)
+
+We need to handle the censoring of $Y$. We do this by fitting a second model for the censoring:
+
+```{r}
+
+Y <- df$wt82_71
+A <- df$qsmk
+
+
+# Fit a censor weight model
+df$censored <- is.na(Y)
+censor_model <- glm(censored ~ qsmk + sex + age + race + education + smokeintensity + smokeyrs + active + exercise + wt71 + age^2 + wt71^2 + smokeintensity^2 + smokeyrs^2, data = df, family = binomial(link='logit'))
+
+# Compute  weights and stabilized weights
+prop_censor <- predict(censor_model, type = "response")
+censor_weight <- ifelse(df$censored, prop_censor, 1-prop_censor)
+
+pc <- predict(lm(censored ~ qsmk, data = df), type = "response")
+stable_censor_weight <- censor_weight / ifelse(df$censored, pc, 1-pc)
+
+ipw_c_weight <- `IPW Weights` / censor_weight
+sipw_c_weight <- `Stabilized IPW Weights` / stable_censor_weight
+
+# Compute ATE
+df$id <- 1:nrow(df)
+ate_ipw_fit <- geeglm(wt82_71 ~ qsmk, weights = ipw_c_weight, data = df, id = id, corstr = "independence")
+ate_sipw_fit <- geeglm(wt82_71 ~ qsmk, weights = sipw_c_weight, data = df, id = id, corstr = "independence")
+
+getci <- function(fit, name){
+  c <- coef(summary(fit))["qsmk",]
+  ci <- with(as.data.frame(c),
+            cbind(
+                  ATE = Estimate,
+                  Std.Err = Std.err,
+                  Lower = Estimate-1.96*Std.err,
+                  Upper = Estimate+1.96*Std.err
+                  ))
+  rownames(ci) <- name
+  return(ci)
+}
+
+ipw <- rbind(
+  getci(ate_sipw_fit, "ipw"),
+  getci(ate_sipw_fit, "sipw")
+)
+
+ipw
+
+
+```
+
+#### c)
+
+Two methods to estimate the variance of the ATE include the sandwich variance estimator (from estimating equation theory) and bootstrapping. See the final output of part (b) for computed Wald-style confidence intervals based on the sandwich standard error.
+
+#### d)
+
+The stabilized and non-stabilized weights yield exactly the same estimates. This is because in this dataset, there are no extreme propensity weights observed, so there are no instability issues for stabilization to "fix."
+
+### Part 2: Application - Doubly Robust Estimation
+
+#### a)
+
+Below, we fit a linear outcome regression model and extract outcome predictions.
+
+```{r}
+
+# Fit the outcome regression model
+mAL_fit <- lm(wt82_71 ~ qsmk + qsmk*smokeintensity + sex + age + age^2 + 
+                race + education + smokeintensity + smokeintensity^2 + 
+                smokeyrs + smokeyrs^2 + active + exercise + 
+                wt71 + wt71^2, data = df)
+
+# Duplicate data to get counterfactual predictions
+A0 = df
+A0$qsmk = 0
+A1 = df
+A1$qsmk = 1
+
+mAL <- predict(mAL_fit, df, type = "response")
+m0L <- predict(mAL_fit, A0, type = "response")
+m1L <- predict(mAL_fit, A1, type = "response")
+
+```
+
+#### b)
+
+The code below computes the DR estimator using the previous predictions and IPW weights.
+
+```{r}
+# Note that the 1 - g(L) weights are already included in the ipw_c_weight variable
+D <- na.omit((A*ipw_c_weight - (1 - A)*ipw_c_weight) * (Y - mAL) + (m1L - m0L))
+ATE_DR <- mean(D)
+
+cat("Doubly-Robust Estimate of ATE: ", ATE_DR, "\n")
+cat("IPW Weighted Estimate of ATE: ", ipw[1,1])
+
+```
+
+We can see that the doubly-robust estimate is very similar to IPW, just slightly higher. This is logical, since both the DR and IPW estimators should be consistent if the parametric models are correct. Since we use the same parametric models for both with a reasonably large sample, it makes sense that both point estimates are similar in magnitude.
+
+#### c)
+
+The code below compute the standard error of the DR estimator, and places it side-by-side with the IPW standard errors.
+
+```{r}
+SE_DR = sqrt(var(D) / length(D))
+c(dr = SE_DR, ipw[,"Std.Err"])
+```
+
+As we can see, the doubly-robust estimator has a slightly lower variance. This is expected, since one of the chief benefits of the doubly-robust estimator is its superior efficiency. In fact, if both parametric models are correctly specified, the doubly-robust estimator variance achieves the semiparametric efficiency bound; it is the lowest possible variance among all regular and asymptotically normal estimators. Since both the IPW and DR estimators rely on the same parametric model to estimate IP weights, it makes sense that DR would be more efficient than IPW.
+
+{{< pagebreak >}}
+
+
+## Question 2: Standardization and Parametric G-Computation
+
+### Part 1: Theory
+
+### Part 2: Application (1)
+
+#### a)
+
+Since we already fit a linear model of the requested nature in the previous question, and obtained predictions for both counterfactual outcomes, we will reuse it and apply g-computation using the predictions we obtained earlier:
+
+```{r}
+
+ATE_GC <- mean(m1L) - mean(m0L)
+cat("G-Computation Estimate of ATE: ", ATE_GC)
+
+```
+
+{{< pagebreak >}}
+
+#### b)
+
+This is similar to the IPW estimate of the ATE, which was `r ipw[1,1]`, but not exactly the same. The difference likely results from the the fact that the models we've used here rely on different parametric assumptions. IPW assumes a logistic model for the propensity, while standardization assumes a linear model for the conditional mean.
+
+#### c)
+
+Although IPW and standardization means are equivalent, they might not match exactly since different models are used to estimate their nuisance parameters. For example, in the parametric setting of this question, IPW relies on logistic regression, while standardization relies on linear regression. Since these have subtly different parametric assumptions (IPW that the propensities follow a logit-linear model, standardization that the conditional mean is linear), the differences in these assumptions may lead to subtly different estimates of the ATE. More generally, one generally wouldn't use the same modeling technique to estimate a propensity score and a conditional mean (unless $Y$ is also binary); therefore, standardization and IPW estimates would generally differ based on which models are used to estimate nuisances. 
+
+### Part 2: Application (2)
+
+#### a) 
+
+"Doubly-robust" refers to the fact that the estimator will be consistent if either the outcome regression $\hat{m}_A(L)$ is consistent OR if the propensity score $\hat{g}(L)$ is consistent. Even if one nuisance model is wrong (but still converges to *something*, even if it is incorrect), then the DR estimator will still be consistent, though it will be inefficient.
+
+#### b)
+
+Using the computations from the previous sections, we can compute a 95% confidence interval and report it along with point estimates and standard error below:
+
+
+```{r}
+c(estimate = ATE_DR, SE = SE_DR, Lower = ATE_DR - 1.96 * SE_DR, Upper = ATE_DR + 1.96 * SE_DR)
+```
+
+
+
+## References
+
+::: {#refs}
+:::
+
