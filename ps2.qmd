@@ -1,7 +1,7 @@
 ---
-title: "Problem Set #X"
+title: "Problem Set #2"
 subtitle: "BST 258: Causal Inference -- Theory and Practice"
-author: "[Your Name Here]"
+author: "Salvador Balkus"
 date: ""
 format:
   pdf:
@@ -46,6 +46,20 @@ library(geepack)
 
 ### Part 1: Theory
 
+#### 1) 
+
+#### 2)
+
+The goal is to show, under conditional exchangeability, positivity, and consistency, that the IPW mean matches the counterfactual mean. 
+
+\begin{align*}
+E\Big(\frac{I(A = a)Y}{P(A|L)}\Big) &= E\Big(E\Big(\frac{I(A = a)}{P(A|L)}Y|L\Big)\Big) & \text{(iterated expectation law)} \\
+&= E\Big(E\Big(\frac{1}{P(A|L)}Y^a|L\Big)\Big) & \text{(consistency)}\\
+&= E\Big(E\Big(\frac{1}{P(A|L)}|L)\cdot E\Big(Y^a|L\Big)\Big) & \text{(conditional exchangeability)}\\
+&= E\Big(\int\frac{1}{P(A|L)}\cdot P(A|L)da\cdot E\Big(Y^a|L\Big)\Big) & \text{(positivity)}\\
+&= E(E(Y^a|L)) = E(Y^a) & \text{(iterated expectation law)}
+\end{align*}
+
 ### Part 2: Application - Inverse Probability Weighted Estimation
 
 ```{r}
@@ -67,6 +81,7 @@ unzip(temp, exdir = "data")
 }
 download.file(data_urls[[4]], "data/nhefs.csv")
 ```
+
 #### a)
 
 The code below generates IP weights and stabilized weights.
@@ -92,36 +107,19 @@ par(mfrow = c(1,2))
 hist(`IPW Weights`)
 hist(`Stabilized IPW Weights`)
 ```
+
 As we can see by comparing the histograms, although both sets of weights follow the same distribution, the stabilized weights are far less skewed, and contain fewer large values.
 
 #### b)
 
-We need to handle the censoring of $Y$. We do this by fitting a second model for the censoring:
+To calculate the ATE with sandwich standard errors, we can use fit a GEE model with independent correlation structure, weighted by the corresponding IPW weights. The code below does this and displays 95% Wald-style CIs
 
 ```{r}
 
-Y <- df$wt82_71
-A <- df$qsmk
-
-
-# Fit a censor weight model
-df$censored <- is.na(Y)
-censor_model <- glm(censored ~ qsmk + sex + age + race + education + smokeintensity + smokeyrs + active + exercise + wt71 + age^2 + wt71^2 + smokeintensity^2 + smokeyrs^2, data = df, family = binomial(link='logit'))
-
-# Compute  weights and stabilized weights
-prop_censor <- predict(censor_model, type = "response")
-censor_weight <- ifelse(df$censored, prop_censor, 1-prop_censor)
-
-pc <- predict(lm(censored ~ qsmk, data = df), type = "response")
-stable_censor_weight <- censor_weight / ifelse(df$censored, pc, 1-pc)
-
-ipw_c_weight <- `IPW Weights` / censor_weight
-sipw_c_weight <- `Stabilized IPW Weights` / stable_censor_weight
-
 # Compute ATE
 df$id <- 1:nrow(df)
-ate_ipw_fit <- geeglm(wt82_71 ~ qsmk, weights = ipw_c_weight, data = df, id = id, corstr = "independence")
-ate_sipw_fit <- geeglm(wt82_71 ~ qsmk, weights = sipw_c_weight, data = df, id = id, corstr = "independence")
+ate_ipw_fit <- geeglm(wt82_71 ~ qsmk, weights = `IPW Weights`, data = df, id = id, corstr = "independence")
+ate_sipw_fit <- geeglm(wt82_71 ~ qsmk, weights = `Stabilized IPW Weights`, data = df, id = id, corstr = "independence")
 
 getci <- function(fit, name){
   c <- coef(summary(fit))["qsmk",]
@@ -148,17 +146,18 @@ ipw
 
 #### c)
 
-Two methods to estimate the variance of the ATE include the sandwich variance estimator (from estimating equation theory) and bootstrapping. See the final output of part (b) for computed Wald-style confidence intervals based on the sandwich standard error.
+Two methods to estimate the variance of the ATE include the sandwich variance estimator (from estimating equation theory) and bootstrapping. See the final output of part (b) above for computed Wald-style confidence intervals based on the sandwich standard error using GEE.
 
 #### d)
 
-The stabilized and non-stabilized weights yield exactly the same estimates. This is because in this dataset, there are no extreme propensity weights observed, so there are no instability issues for stabilization to "fix."
+The stabilized and non-stabilized weights yield exactly the same estimates. This is because in this dataset, there are no extreme propensity weights observed, so there are no instability issues for stabilization to "fix." This likely occurred because most of the  covariates for which we adjusted were mostly simple categorical features, and for these types of covariates it is difficult to get extremely low propensity scores or near-positivity-violations with such a large dataset.
+
 
 ### Part 2: Application - Doubly Robust Estimation
 
 #### a)
 
-Below, we fit a linear outcome regression model and extract outcome predictions.
+Below, we fit a linear outcome regression model and extract outcome predictions for the doubly-robust estimator.
 
 ```{r}
 
@@ -185,16 +184,20 @@ m1L <- predict(mAL_fit, A1, type = "response")
 The code below computes the DR estimator using the previous predictions and IPW weights.
 
 ```{r}
+A <- df$qsmk
+Y <- df$wt82_71
+
 # Note that the 1 - g(L) weights are already included in the ipw_c_weight variable
-D <- na.omit((A*ipw_c_weight - (1 - A)*ipw_c_weight) * (Y - mAL) + (m1L - m0L))
+D <- na.omit((A*`IPW Weights` - (1 - A)*`IPW Weights`) * (Y - mAL) + (m1L - m0L))
 ATE_DR <- mean(D)
 
 cat("Doubly-Robust Estimate of ATE: ", ATE_DR, "\n")
-cat("IPW Weighted Estimate of ATE: ", ipw[1,1])
+cat("IPW Weighted Estimate of ATE: ", ipw[1,1], "\n")
+cat("SIPW Weighted Estimate of ATE: ", ipw[2,1])
 
 ```
 
-We can see that the doubly-robust estimate is very similar to IPW, just slightly higher. This is logical, since both the DR and IPW estimators should be consistent if the parametric models are correct. Since we use the same parametric models for both with a reasonably large sample, it makes sense that both point estimates are similar in magnitude.
+We can see that the ATE doubly-robust estimate is very similar to IPW, just slightly smaller This is logical, since both the DR and IPW estimators should be consistent if the parametric models are correct. Since we use the same parametric models for both with a reasonably large sample, it makes sense that both point estimates are similar in magnitude.
 
 #### c)
 
@@ -213,6 +216,48 @@ As we can see, the doubly-robust estimator has a slightly lower variance. This i
 ## Question 2: Standardization and Parametric G-Computation
 
 ### Part 1: Theory
+
+#### 1)
+
+Let us show that the standardized mean and the IPW mean are equivalent; that is,
+
+$$\sum_lE(Y|A=a, L=l)\cdot P(L=l) = E\Big(\frac{I(A=a)}{P(A|L)}Y\Big)$$
+
+Proceed as follows:
+
+\begin{align*}
+\sum_lE(Y|A=a, L=l)\cdot P(L=l) &= \sum_l\int Y\cdot P(Y=y|A=a, L=l) dy \cdot P(L = l)\\
+&= \sum_l\int \frac{P(A=a|L=l)}{P(A=a|L=l)}Y\cdot P(Y=y|A=a, L=l) dy \cdot P(L = l)\\
+&= \sum_l\int \frac{P(A=a, L=l)}{P(L = l) \cdot P(A=a|L=l)}\cdot P(L = l) \cdot Y\cdot P(Y=y|A=a, L=l)dy\\
+&= \sum_l\int \frac{1}{P(A=a|L=l)}Y\cdot P(Y=y, A=a, L=l)dy\\
+\end{align*}
+
+since $P(Y=y, A=a, L=l) = P(Y=y|A=a, L=l) \cdot P(A= a, L = l)$ by definition of conditional probability. Furthermore, by the definition of multivariate integration, we have that the above is equal to 
+
+\begin{align*}
+\sum_l\int \frac{1}{P(A=a|L=l)}Y\cdot P(Y=y, A=a, L=l)dy\\
+= E\Big(E_L\Big(\frac{I(A = a, L = l)}{P(A|L)}Y\Big)\Big)\\
+= E\Big(\frac{I(A = a)}{P(A|L)}Y\Big)
+\end{align*}
+
+which completes the proof that the standardized mean and IPW mean are equivalent.
+
+#### 2)
+
+Under conditional exchangeability and consistency, we can show that the standardized mean is equal to the mean of the potential outcome as follows:
+
+\begin{align*}
+\sum_lE(Y|A=a, L=l)\cdot P(L=l) &= \sum_lE(Y^a|A=a, L=l)\cdot P(L=l) & \text{(consistency)}\\
+&= \sum_lE(Y^a| L=l)\cdot P(L=l)  & \text{(conditional exchangeability)}\\
+&= E(E(Y^a | L = l)) & \text{(definition of expectation)}\\
+&= E(Y^a) & \text{(iterated expectation law)}
+\end{align*}
+
+#### 3)
+
+If we can be sure that the outcome model is correct, we would prefer the plug-in estimator if we do not know the form of $\hat{g}(L)$ and/or it is hard to estimate. This can occur, for example, if $L$ is high-dimensional with lots of continuous covariates. In fact, for certain parametric outcome models, the plug-in will also be doubly-robust and will achieve comparable variance, so there is no advantage to using a DR method.
+
+However, if $\hat{m}_A$ is nonparametric, and $\hat{g}(L)$ can be estimated, then we would prefer the doubly-robust estimator because it will probably achieve lower variance. If we use a nonparametric model for the plug-in, we've seen that the plug-in is asymptotically biased; estimating $\hat{g}(L)$ and using the doubly-robust method will reduce variance (not to mention still be consistent if $\hat{m}_A$ actually winds up being misspecified).
 
 ### Part 2: Application (1)
 
@@ -245,13 +290,13 @@ Although IPW and standardization means are equivalent, they might not match exac
 
 #### b)
 
-Using the computations from the previous sections, we can compute a 95% confidence interval and report it along with point estimates and standard error below:
+Since we've already implemented the doubly-robust estimator in Question 1, Part 2: Doubly-Robust Estimation and computed an estimate of the ATE with standard errors, we can compute a 95% confidence interval and report it along with point estimates and standard error below:
 
 
 ```{r}
 c(estimate = ATE_DR, SE = SE_DR, Lower = ATE_DR - 1.96 * SE_DR, Upper = ATE_DR + 1.96 * SE_DR)
 ```
-
+Note that 0 is well outside the bounds of this effect estimate, so clearly the average treatment effect of smoking cessation on weight gain is statistically significant at the $\alpha = 0.05$ level. 
 
 
 ## References
