@@ -48,59 +48,85 @@ library(geepack)
 
 #### 1) 
 
+According to @hernan2023causal Section 12.2, no - we do not need to invoke conditional exchangeability for $A$ and $L$ to be statistically independent or $E(Y|A = a)$ in the pseudo-population to mirror the standardized mean $\sum_l E(Y|A=a, L=l)P(L=l)$. Neither statement involves counterfactual variables. Only positivity is required, because in the pseudo-population, $E(Y|A) = E\Big(\frac{I(A=a)Y}{P(A=a|L=l)}\Big)$, and under positivity,
+
+\begin{align*}
+E\Big(\frac{I(A=a)Y}{P(A=a|L=l)}\Big) &= \sum_l \frac{1}{P(a|l)}E(Y|A = a, L=l)P(A=a|L=l)P(L=1)\\
+&= \sum_l E(Y|A = a, L = l) P(L = l)
+\end{align*}
+
+which proves that the the conditional mean in the pseudo-population mirrors the standardized mean and implies $A$ is independent of $L$.
+
+Conditional exchangeability implies that the mean of $Y^a$ is the same in both the pseudo-population and the regular population (which we prove in question 2). This further implies that, in the pseudo-population, (a) unconditional exchangeability (no confounding) holds, (b) $E(Y^a)  = E(Y|A = a)$ and (c) association indicates causation.
+
+
 #### 2)
 
-The goal is to show, under conditional exchangeability, positivity, and consistency, that the IPW mean matches the counterfactual mean. 
+The goal is to show, under conditional exchangeability, positivity, and consistency, that the IPW mean matches the counterfactual mean. Proceed as follows:
 
 \begin{align*}
 E\Big(\frac{I(A = a)Y}{P(A|L)}\Big) &= E\Big(E\Big(\frac{I(A = a)}{P(A|L)}Y|L\Big)\Big) & \text{(iterated expectation law)} \\
 &= E\Big(E\Big(\frac{1}{P(A|L)}Y^a|L\Big)\Big) & \text{(consistency)}\\
+&= E\Big(E\Big(\frac{I(A = a)}{P(a|L)Y^a|L}\Big)\Big) & \text{(positivity)}\\
 &= E\Big(E\Big(\frac{1}{P(A|L)}|L)\cdot E\Big(Y^a|L\Big)\Big) & \text{(conditional exchangeability)}\\
-&= E\Big(\int\frac{1}{P(A|L)}\cdot P(A|L)da\cdot E\Big(Y^a|L\Big)\Big) & \text{(positivity)}\\
+&= E\Big(\int\frac{1}{P(A|L)}\cdot P(A|L)da\cdot E\Big(Y^a|L\Big)\Big) \\
 &= E(E(Y^a|L)) = E(Y^a) & \text{(iterated expectation law)}
 \end{align*}
 
-### Part 2: Application - Inverse Probability Weighted Estimation
+### Part 2: Application, Inverse Probability Weighted Estimation
+
+First, we read in the data:
 
 ```{r}
-library(fastverse)
 library(readxl)
 library(stringr)
-# create URLs for downloading NHEFS data
-url_trunks <- c("2012/10/nhefs_sas.zip", "2012/10/nhefs_stata.zip",
-"2017/01/nhefs_excel.zip", "1268/20/nhefs.csv")
+
+url_trunks <- c("2012/10/nhefs_sas.zip", "2012/10/nhefs_stata.zip", 
+                "2017/01/nhefs_excel.zip", "1268/20/nhefs.csv")
+
 url_stub <- "https://cdn1.sph.harvard.edu/wp-content/uploads/sites/1268/"
 data_urls <- lapply(url_trunks, function(url_trunk) {
-paste0(url_stub, url_trunk)
+  paste0(url_stub, url_trunk)
 })
-# download and unzip files
+
 temp <- tempfile()
 for (i in seq_len(sum(str_count(url_trunks, "zip")))) {
-download.file(data_urls[[i]], temp)
-unzip(temp, exdir = "data")
+  download.file(data_urls[[i]], temp)
+  unzip(temp, exdir = "data")
 }
 download.file(data_urls[[4]], "data/nhefs.csv")
 ```
 
+
 #### a)
 
-The code below generates IP weights and stabilized weights.
+The code below generates IP weights and stabilized weights by fitting a logistic regression with the covariates specified in the problem.
 
 ```{r}
+# Read and filter the data to the variables we need
 df <- read.csv(here("data", "nhefs.csv"))
 df <- df %>% 
-  select(wt82_71, qsmk, sex, age, race, education, smokeintensity, smokeyrs, active, exercise, wt71) %>% 
-  transform(education = factor(education), active = factor(active), exercise = factor(exercise))
+  select(wt82_71, qsmk, sex, age, race, education, 
+         smokeintensity, smokeyrs, active, exercise, wt71) %>% 
+  transform(education = factor(education), active = factor(active), 
+            exercise = factor(exercise)) %>%
+  drop_na(wt82_71)
 
-
-prop_model <- glm(qsmk ~ sex + age + race + education + smokeintensity + smokeyrs + active + exercise + wt71 + age^2 + wt71^2 + smokeintensity^2 + smokeyrs^2, data = df, family = binomial(link='logit'))
+# Fit the propensity model
+prop_model <- glm(qsmk ~ sex + age + race + education + smokeintensity + 
+                    smokeyrs + active + exercise + wt71 + age^2 + wt71^2 + 
+                    smokeintensity^2 + smokeyrs^2, data = df, 
+                  family = binomial(link='logit'))
 prop <- predict(prop_model, df, type="response")
 p <- mean(df$qsmk)
 
+# Compute weights
 `IPW Weights` <- ifelse(df$qsmk, 1 / prop, 1 / (1-prop))
 `Stabilized IPW Weights` <- `IPW Weights` * ifelse(df$qsmk, p, 1-p)
 
 ```
+
+Now, we can plot histograms of both the IPW and Stabilized IPW weights:
 
 ```{r}
 par(mfrow = c(1,2))
@@ -118,8 +144,10 @@ To calculate the ATE with sandwich standard errors, we can use fit a GEE model w
 
 # Compute ATE
 df$id <- 1:nrow(df)
-ate_ipw_fit <- geeglm(wt82_71 ~ qsmk, weights = `IPW Weights`, data = df, id = id, corstr = "independence")
-ate_sipw_fit <- geeglm(wt82_71 ~ qsmk, weights = `Stabilized IPW Weights`, data = df, id = id, corstr = "independence")
+ate_ipw_fit <- geeglm(wt82_71 ~ qsmk, weights = `IPW Weights`, 
+                      data = df, id = id, corstr = "independence")
+ate_sipw_fit <- geeglm(wt82_71 ~ qsmk, weights = `Stabilized IPW Weights`, 
+                       data = df, id = id, corstr = "independence")
 
 getci <- function(fit, name){
   c <- coef(summary(fit))["qsmk",]
@@ -153,7 +181,7 @@ Two methods to estimate the variance of the ATE include the sandwich variance es
 The stabilized and non-stabilized weights yield exactly the same estimates. This is because in this dataset, there are no extreme propensity weights observed, so there are no instability issues for stabilization to "fix." This likely occurred because most of the  covariates for which we adjusted were mostly simple categorical features, and for these types of covariates it is difficult to get extremely low propensity scores or near-positivity-violations with such a large dataset.
 
 
-### Part 2: Application - Doubly Robust Estimation
+### Part 2: Application, Doubly Robust Estimation
 
 #### a)
 
@@ -187,7 +215,8 @@ The code below computes the DR estimator using the previous predictions and IPW 
 A <- df$qsmk
 Y <- df$wt82_71
 
-# Note that the 1 - g(L) weights are already included in the ipw_c_weight variable
+# Note that the 1 - g(L) weights are already 
+# included in the ipw_c_weight variable
 D <- na.omit((A*`IPW Weights` - (1 - A)*`IPW Weights`) * (Y - mAL) + (m1L - m0L))
 ATE_DR <- mean(D)
 
@@ -197,7 +226,7 @@ cat("SIPW Weighted Estimate of ATE: ", ipw[2,1])
 
 ```
 
-We can see that the ATE doubly-robust estimate is very similar to IPW, just slightly smaller This is logical, since both the DR and IPW estimators should be consistent if the parametric models are correct. Since we use the same parametric models for both with a reasonably large sample, it makes sense that both point estimates are similar in magnitude.
+We can see that the ATE doubly-robust estimate is very similar to IPW, just slightly larger. This is logical, since both the DR and IPW estimators should be consistent if the parametric models are correct. Since we use the same parametric models for both with a reasonably large sample, it makes sense that both point estimates are similar in magnitude.
 
 #### c)
 
@@ -294,7 +323,8 @@ Since we've already implemented the doubly-robust estimator in Question 1, Part 
 
 
 ```{r}
-c(estimate = ATE_DR, SE = SE_DR, Lower = ATE_DR - 1.96 * SE_DR, Upper = ATE_DR + 1.96 * SE_DR)
+c(estimate = ATE_DR, SE = SE_DR, 
+  Lower = ATE_DR - 1.96 * SE_DR, Upper = ATE_DR + 1.96 * SE_DR)
 ```
 Note that 0 is well outside the bounds of this effect estimate, so clearly the average treatment effect of smoking cessation on weight gain is statistically significant at the $\alpha = 0.05$ level. 
 
