@@ -42,11 +42,16 @@ library(tidyverse)
 library(geepack)
 ```
 
+GitHub Repository: [https://github.com/salbalkus/bst258-ps2](https://github.com/salbalkus/bst258-ps2)
+
 ## Question 1: Inverse Probability Weighting
 
 ### Part 1: Theory
 
 #### 1) 
+
+:::{.callout-note title="Answer"}
+
 
 According to @hernan2023causal Section 12.2, no - we do not need to invoke conditional exchangeability for $A$ and $L$ to be statistically independent or $E(Y|A = a)$ in the pseudo-population to mirror the standardized mean $\sum_l E(Y|A=a, L=l)P(L=l)$. Neither statement involves counterfactual variables. Only positivity is required, because in the pseudo-population, $E(Y|A) = E\Big(\frac{I(A=a)Y}{P(A=a|L=l)}\Big)$, and under positivity,
 
@@ -57,10 +62,13 @@ E\Big(\frac{I(A=a)Y}{P(A=a|L=l)}\Big) &= \sum_l \frac{1}{P(a|l)}E(Y|A = a, L=l)P
 
 which proves that the the conditional mean in the pseudo-population mirrors the standardized mean and implies $A$ is independent of $L$.
 
-Conditional exchangeability implies that the mean of $Y^a$ is the same in both the pseudo-population and the regular population (which we prove in question 2). This further implies that, in the pseudo-population, (a) unconditional exchangeability (no confounding) holds, (b) $E(Y^a)  = E(Y|A = a)$ and (c) association indicates causation.
+Conditional exchangeability implies that the mean of $Y^a$ is the same in both the pseudo-population and the regular population (which we prove in the next sub-part). This further implies that, in the pseudo-population, (a) unconditional exchangeability (no confounding) holds, (b) $E(Y^a)  = E(Y|A = a)$ and (c) association indicates causation.
 
+:::
 
 #### 2)
+
+:::{.callout-note title="Answer"}
 
 The goal is to show, under conditional exchangeability, positivity, and consistency, that the IPW mean matches the counterfactual mean. Proceed as follows:
 
@@ -72,6 +80,10 @@ E\Big(\frac{I(A = a)Y}{P(A|L)}\Big) &= E\Big(E\Big(\frac{I(A = a)}{P(A|L)}Y|L\Bi
 &= E\Big(\int\frac{1}{P(A|L)}\cdot P(A|L)da\cdot E\Big(Y^a|L\Big)\Big) \\
 &= E(E(Y^a|L)) = E(Y^a) & \text{(iterated expectation law)}
 \end{align*}
+
+This proves that the IPW mean matches the counterfactual mean.
+
+:::
 
 ### Part 2: Application, Inverse Probability Weighted Estimation
 
@@ -97,8 +109,9 @@ for (i in seq_len(sum(str_count(url_trunks, "zip")))) {
 download.file(data_urls[[4]], "data/nhefs.csv")
 ```
 
-
 #### a)
+
+:::{.callout-note title="Answer"}
 
 The code below generates IP weights and stabilized weights by fitting a logistic regression with the covariates specified in the problem.
 
@@ -109,13 +122,15 @@ df <- df %>%
   select(wt82_71, qsmk, sex, age, race, education, 
          smokeintensity, smokeyrs, active, exercise, wt71) %>% 
   transform(education = factor(education), active = factor(active), 
-            exercise = factor(exercise)) %>%
+            exercise = factor(exercise), race = factor(race)) %>%
   drop_na(wt82_71)
 
 # Fit the propensity model
-prop_model <- glm(qsmk ~ sex + age + race + education + smokeintensity + 
-                    smokeyrs + active + exercise + wt71 + age^2 + wt71^2 + 
-                    smokeintensity^2 + smokeyrs^2, data = df, 
+prop_model <- glm(qsmk ~ sex + age + race + education + 
+                    smokeintensity + smokeyrs + active + 
+                    exercise + wt71 + I(age^2) + 
+                    I(wt71^2) + I(smokeintensity^2) + 
+                    I(smokeyrs^2), data = df, 
                   family = binomial(link='logit'))
 prop <- predict(prop_model, df, type="response")
 p <- mean(df$qsmk)
@@ -130,13 +145,17 @@ Now, we can plot histograms of both the IPW and Stabilized IPW weights:
 
 ```{r}
 par(mfrow = c(1,2))
-hist(`IPW Weights`)
-hist(`Stabilized IPW Weights`)
+hist(`IPW Weights`, breaks = 30, main = NULL)
+hist(`Stabilized IPW Weights`, breaks = 30, main = NULL)
 ```
 
-As we can see by comparing the histograms, although both sets of weights follow the same distribution, the stabilized weights are far less skewed, and contain fewer large values.
+As we can see by comparing the histograms, although both sets of weights follow a similar distribution, the stabilized weights are far less skewed, and contain fewer extremely large values.
+
+:::
 
 #### b)
+
+:::{.callout-note title="Answer"}
 
 To calculate the ATE with sandwich standard errors, we can use fit a GEE model with independent correlation structure, weighted by the corresponding IPW weights. The code below does this and displays 95% Wald-style CIs
 
@@ -144,6 +163,8 @@ To calculate the ATE with sandwich standard errors, we can use fit a GEE model w
 
 # Compute ATE
 df$id <- 1:nrow(df)
+
+# Fit models that yield sandwich standard errors for comparison
 ate_ipw_fit <- geeglm(wt82_71 ~ qsmk, weights = `IPW Weights`, 
                       data = df, id = id, corstr = "independence")
 ate_sipw_fit <- geeglm(wt82_71 ~ qsmk, weights = `Stabilized IPW Weights`, 
@@ -163,27 +184,38 @@ getci <- function(fit, name){
 }
 
 ipw <- rbind(
-  getci(ate_sipw_fit, "ipw"),
+  getci(ate_ipw_fit, "ipw"),
   getci(ate_sipw_fit, "sipw")
 )
-
 ipw
-
 
 ```
 
+:::
+
 #### c)
+
+:::{.callout-note title="Answer"}
 
 Two methods to estimate the variance of the ATE include the sandwich variance estimator (from estimating equation theory) and bootstrapping. See the final output of part (b) above for computed Wald-style confidence intervals based on the sandwich standard error using GEE.
 
+:::
+
 #### d)
+
+:::{.callout-note title="Answer"}
 
 The stabilized and non-stabilized weights yield exactly the same estimates. This is because in this dataset, there are no extreme propensity weights observed, so there are no instability issues for stabilization to "fix." This likely occurred because most of the  covariates for which we adjusted were mostly simple categorical features, and for these types of covariates it is difficult to get extremely low propensity scores or near-positivity-violations with such a large dataset.
 
+*Note*: If we had simply computed the standard errors without sandwich standard errors, say by using the empirical variance of the IPW/SIPW estimating function, the methods would have obtained different standard errors and CI results. In general, SIPW achieves lower variance than IPW (@hernan2023causal). However, sandwich standard errors are conservative for the SIPW, so we get the same results for both here. 
+
+:::
 
 ### Part 2: Application, Doubly Robust Estimation
 
 #### a)
+
+:::{.callout-note title="Answer"}
 
 Below, we fit a linear outcome regression model and extract outcome predictions for the doubly-robust estimator.
 
@@ -207,7 +239,11 @@ m1L <- predict(mAL_fit, A1, type = "response")
 
 ```
 
+:::
+
 #### b)
+
+:::{.callout-note title="Answer"}
 
 The code below computes the DR estimator using the previous predictions and IPW weights.
 
@@ -215,9 +251,8 @@ The code below computes the DR estimator using the previous predictions and IPW 
 A <- df$qsmk
 Y <- df$wt82_71
 
-# Note that the 1 - g(L) weights are already 
-# included in the ipw_c_weight variable
-D <- na.omit((A*`IPW Weights` - (1 - A)*`IPW Weights`) * (Y - mAL) + (m1L - m0L))
+# compute the DR estimating equation
+D <- (A*`IPW Weights` - (1 - A)*`IPW Weights`) * (Y - mAL) + (m1L - m0L)
 ATE_DR <- mean(D)
 
 cat("Doubly-Robust Estimate of ATE: ", ATE_DR, "\n")
@@ -226,9 +261,13 @@ cat("SIPW Weighted Estimate of ATE: ", ipw[2,1])
 
 ```
 
-We can see that the ATE doubly-robust estimate is very similar to IPW, just slightly larger. This is logical, since both the DR and IPW estimators should be consistent if the parametric models are correct. Since we use the same parametric models for both with a reasonably large sample, it makes sense that both point estimates are similar in magnitude.
+We can see that the ATE doubly-robust estimate is very similar to IPW, just slightly larger. This is logical, since both the DR and IPW estimators should be consistent if the parametric models are correct. Since we use the same parametric models for both with a reasonably large sample, it makes sense that both point estimates are similar in magnitude - they should be asymptotically converging to the same value. However, because the DR estimator includes an outcome regression term, there is a slight finite-sample difference between the estimators due to the bias correction occurring in the DR estimator. Since the DR estimator is generally more efficient, we would expect its estimate to be slightly closer to the truth.
+
+:::
 
 #### c)
+
+:::{.callout-note title="Answer"}
 
 The code below compute the standard error of the DR estimator, and places it side-by-side with the IPW standard errors.
 
@@ -239,6 +278,8 @@ c(dr = SE_DR, ipw[,"Std.Err"])
 
 As we can see, the doubly-robust estimator has a slightly lower variance. This is expected, since one of the chief benefits of the doubly-robust estimator is its superior efficiency. In fact, if both parametric models are correctly specified, the doubly-robust estimator variance achieves the semiparametric efficiency bound; it is the lowest possible variance among all regular and asymptotically normal estimators. Since both the IPW and DR estimators rely on the same parametric model to estimate IP weights, it makes sense that DR would be more efficient than IPW.
 
+:::
+
 {{< pagebreak >}}
 
 
@@ -248,6 +289,8 @@ As we can see, the doubly-robust estimator has a slightly lower variance. This i
 
 #### 1)
 
+:::{.callout-note title="Answer"}
+
 Let us show that the standardized mean and the IPW mean are equivalent; that is,
 
 $$\sum_lE(Y|A=a, L=l)\cdot P(L=l) = E\Big(\frac{I(A=a)}{P(A|L)}Y\Big)$$
@@ -255,10 +298,10 @@ $$\sum_lE(Y|A=a, L=l)\cdot P(L=l) = E\Big(\frac{I(A=a)}{P(A|L)}Y\Big)$$
 Proceed as follows:
 
 \begin{align*}
-\sum_lE(Y|A=a, L=l)\cdot P(L=l) &= \sum_l\int Y\cdot P(Y=y|A=a, L=l) dy \cdot P(L = l)\\
-&= \sum_l\int \frac{P(A=a|L=l)}{P(A=a|L=l)}Y\cdot P(Y=y|A=a, L=l) dy \cdot P(L = l)\\
-&= \sum_l\int \frac{P(A=a, L=l)}{P(L = l) \cdot P(A=a|L=l)}\cdot P(L = l) \cdot Y\cdot P(Y=y|A=a, L=l)dy\\
-&= \sum_l\int \frac{1}{P(A=a|L=l)}Y\cdot P(Y=y, A=a, L=l)dy\\
+\sum_lE(Y|A=a, L=l)\cdot P(L=l) = \sum_l\int Y\cdot P(Y=y|A=a, L=l) dy \cdot P(L = l)\\
+= \sum_l\int \frac{P(A=a|L=l)}{P(A=a|L=l)}Y\cdot P(Y=y|A=a, L=l) dy \cdot P(L = l)\\
+= \sum_l\int \frac{P(A=a, L=l)}{P(L = l) \cdot P(A=a|L=l)}\cdot P(L = l) \cdot Y\cdot P(Y=y|A=a, L=l)dy\\
+= \sum_l\int \frac{1}{P(A=a|L=l)}Y\cdot P(Y=y, A=a, L=l)dy\\
 \end{align*}
 
 since $P(Y=y, A=a, L=l) = P(Y=y|A=a, L=l) \cdot P(A= a, L = l)$ by definition of conditional probability. Furthermore, by the definition of multivariate integration, we have that the above is equal to 
@@ -271,28 +314,43 @@ since $P(Y=y, A=a, L=l) = P(Y=y|A=a, L=l) \cdot P(A= a, L = l)$ by definition of
 
 which completes the proof that the standardized mean and IPW mean are equivalent.
 
+:::
+
 #### 2)
+
+:::{.callout-note title="Answer"}
 
 Under conditional exchangeability and consistency, we can show that the standardized mean is equal to the mean of the potential outcome as follows:
 
 \begin{align*}
-\sum_lE(Y|A=a, L=l)\cdot P(L=l) &= \sum_lE(Y^a|A=a, L=l)\cdot P(L=l) & \text{(consistency)}\\
+& \sum_lE(Y|A=a, L=l)\cdot P(L=l) \\
+&= \sum_lE(Y^a|A=a, L=l)\cdot P(L=l) & \text{(consistency)}\\
 &= \sum_lE(Y^a| L=l)\cdot P(L=l)  & \text{(conditional exchangeability)}\\
 &= E(E(Y^a | L = l)) & \text{(definition of expectation)}\\
 &= E(Y^a) & \text{(iterated expectation law)}
 \end{align*}
 
+This proves that the standardized mean is equal to the mean of the potential outcome.
+
+:::
+
 #### 3)
+
+:::{.callout-note title="Answer"}
 
 If we can be sure that the outcome model is correct, we would prefer the plug-in estimator if we do not know the form of $\hat{g}(L)$ and/or it is hard to estimate. This can occur, for example, if $L$ is high-dimensional with lots of continuous covariates. In fact, for certain parametric outcome models, the plug-in will also be doubly-robust and will achieve comparable variance, so there is no advantage to using a DR method.
 
 However, if $\hat{m}_A$ is nonparametric, and $\hat{g}(L)$ can be estimated, then we would prefer the doubly-robust estimator because it will probably achieve lower variance. If we use a nonparametric model for the plug-in, we've seen that the plug-in is asymptotically biased; estimating $\hat{g}(L)$ and using the doubly-robust method will reduce variance (not to mention still be consistent if $\hat{m}_A$ actually winds up being misspecified).
 
+:::
+
 ### Part 2: Application (1)
 
 #### a)
 
-Since we already fit a linear model of the requested nature in the previous question, and obtained predictions for both counterfactual outcomes, we will reuse it and apply g-computation using the predictions we obtained earlier:
+:::{.callout-note title="Answer"}
+
+Since we already fit a linear model of the requested nature in Question 1, Part 2, subpart (a), and obtained predictions for both counterfactual outcomes, we will reuse the predictions from it and apply g-computation. The different in means under $A = 1$ versus $A = 0$ is computed below:
 
 ```{r}
 
@@ -301,23 +359,39 @@ cat("G-Computation Estimate of ATE: ", ATE_GC)
 
 ```
 
+:::
+
 {{< pagebreak >}}
 
 #### b)
 
-This is similar to the IPW estimate of the ATE, which was `r ipw[1,1]`, but not exactly the same. The difference likely results from the the fact that the models we've used here rely on different parametric assumptions. IPW assumes a logistic model for the propensity, while standardization assumes a linear model for the conditional mean.
+:::{.callout-note title="Answer"}
+
+This is similar to the IPW estimate of the ATE, which was `r ipw[1,1]`, but not exactly the same. The difference likely results from the the fact that the models we've used here rely on different parametric assumptions. IPW assumes a logistic model for the propensity, while standardization assumes a linear model for the conditional mean. In a real data setting, there will likely always be some slight model misspecification. Since we use two different models for IPW versus standardization, the ways in which this model misspecification will manifest (and therefore the amount of bias produced) will impact the IPW and standardization point estimates in different ways. This is why there are slight differences in their magnitudes for this ATE estimate.
+
+:::
 
 #### c)
 
-Although IPW and standardization means are equivalent, they might not match exactly since different models are used to estimate their nuisance parameters. For example, in the parametric setting of this question, IPW relies on logistic regression, while standardization relies on linear regression. Since these have subtly different parametric assumptions (IPW that the propensities follow a logit-linear model, standardization that the conditional mean is linear), the differences in these assumptions may lead to subtly different estimates of the ATE. More generally, one generally wouldn't use the same modeling technique to estimate a propensity score and a conditional mean (unless $Y$ is also binary); therefore, standardization and IPW estimates would generally differ based on which models are used to estimate nuisances. 
+:::{.callout-note title="Answer"}
+
+Although IPW and standardization means are equivalent, they might not match exactly since different models are used to estimate their nuisance parameters. For example, in the parametric setting of this question, IPW relies on logistic regression, while standardization relies on linear regression. Since these have subtly different parametric assumptions (IPW that the propensities follow a logit-linear model, standardization that the conditional mean is linear), the differences in these assumptions may lead to subtly different estimates in the (unavoidable) presence of model misspecification, no matter how slight. More generally, one generally wouldn't use the same modeling technique to estimate a propensity score and a conditional mean (unless $Y$ is also binary); therefore, standardization and IPW estimates would generally differ based on which models are used to estimate nuisances. 
+
+:::
 
 ### Part 2: Application (2)
 
 #### a) 
 
+:::{.callout-note title="Answer"}
+
 "Doubly-robust" refers to the fact that the estimator will be consistent if either the outcome regression $\hat{m}_A(L)$ is consistent OR if the propensity score $\hat{g}(L)$ is consistent. Even if one nuisance model is wrong (but still converges to *something*, even if it is incorrect), then the DR estimator will still be consistent, though it will be inefficient.
 
+:::
+
 #### b)
+
+:::{.callout-note title="Answer"}
 
 Since we've already implemented the doubly-robust estimator in Question 1, Part 2: Doubly-Robust Estimation and computed an estimate of the ATE with standard errors, we can compute a 95% confidence interval and report it along with point estimates and standard error below:
 
@@ -327,7 +401,7 @@ c(estimate = ATE_DR, SE = SE_DR,
   Lower = ATE_DR - 1.96 * SE_DR, Upper = ATE_DR + 1.96 * SE_DR)
 ```
 Note that 0 is well outside the bounds of this effect estimate, so clearly the average treatment effect of smoking cessation on weight gain is statistically significant at the $\alpha = 0.05$ level. 
-
+:::
 
 ## References
 
